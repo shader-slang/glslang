@@ -316,6 +316,7 @@ const CustomFunction CustomFunctions[] = {
 
     { EOpTextureQuerySize,      "textureSize",           nullptr },
     { EOpTextureQueryLod,       "textureQueryLod",       nullptr },
+    { EOpTextureQueryLod,       "textureQueryLOD",       nullptr }, // extension GL_ARB_texture_query_lod
     { EOpTextureQueryLevels,    "textureQueryLevels",    nullptr },
     { EOpTextureQuerySamples,   "textureSamples",        nullptr },
     { EOpTexture,               "texture",               nullptr },
@@ -4269,7 +4270,7 @@ void TBuiltIns::initialize(int version, EProfile profile, const SpvVersion& spvV
         //
         //============================================================================
 
-        if (profile != EEsProfile && version >= 400) {
+        if (profile != EEsProfile && (version >= 400 || version == 150)) {
             stageBuiltins[EShLangGeometry].append(
                 "void EmitStreamVertex(int);"
                 "void EndStreamPrimitive(int);"
@@ -4553,11 +4554,13 @@ void TBuiltIns::initialize(int version, EProfile profile, const SpvVersion& spvV
             "\n");
     }
 
-    // GL_ARB_shader_clock
+    // GL_ARB_shader_clock& GL_EXT_shader_realtime_clock
     if (profile != EEsProfile && version >= 450) {
         commonBuiltins.append(
             "uvec2 clock2x32ARB();"
             "uint64_t clockARB();"
+            "uvec2 clockRealtime2x32EXT();"
+            "uint64_t clockRealtimeEXT();"
             "\n");
     }
 
@@ -5854,6 +5857,7 @@ void TBuiltIns::initialize(int version, EProfile profile, const SpvVersion& spvV
             "in    uint   gl_IncomingRayFlagsNV;"
             "in    uint   gl_IncomingRayFlagsEXT;"
             "in    float  gl_CurrentRayTimeNV;"
+            "in    uint   gl_CullMaskEXT;"
             "\n";
         const char *hitDecls =
             "in    uvec3  gl_LaunchIDNV;"
@@ -5890,6 +5894,7 @@ void TBuiltIns::initialize(int version, EProfile profile, const SpvVersion& spvV
             "in    uint   gl_IncomingRayFlagsNV;"
             "in    uint   gl_IncomingRayFlagsEXT;"
             "in    float  gl_CurrentRayTimeNV;"
+            "in    uint   gl_CullMaskEXT;"
             "\n";
         const char *missDecls =
             "in    uvec3  gl_LaunchIDNV;"
@@ -5909,6 +5914,7 @@ void TBuiltIns::initialize(int version, EProfile profile, const SpvVersion& spvV
             "in    uint   gl_IncomingRayFlagsNV;"
             "in    uint   gl_IncomingRayFlagsEXT;"
             "in    float  gl_CurrentRayTimeNV;"
+            "in    uint   gl_CullMaskEXT;"
             "\n";
 
         const char *callableDecls =
@@ -6245,38 +6251,44 @@ void TBuiltIns::addQueryFunctions(TSampler sampler, const TString& typeName, int
     //
     // textureQueryLod(), fragment stage only
     // Also enabled with extension GL_ARB_texture_query_lod
+    // Extension GL_ARB_texture_query_lod says that textureQueryLOD() also exist at extension.
 
     if (profile != EEsProfile && version >= 150 && sampler.isCombined() && sampler.dim != EsdRect &&
         ! sampler.isMultiSample() && ! sampler.isBuffer()) {
-        for (int f16TexAddr = 0; f16TexAddr < 2; ++f16TexAddr) {
-            if (f16TexAddr && sampler.type != EbtFloat16)
-                continue;
-            stageBuiltins[EShLangFragment].append("vec2 textureQueryLod(");
-            stageBuiltins[EShLangFragment].append(typeName);
-            if (dimMap[sampler.dim] == 1)
-                if (f16TexAddr)
-                    stageBuiltins[EShLangFragment].append(", float16_t");
-                else
-                    stageBuiltins[EShLangFragment].append(", float");
-            else {
-                if (f16TexAddr)
-                    stageBuiltins[EShLangFragment].append(", f16vec");
-                else
-                    stageBuiltins[EShLangFragment].append(", vec");
-                stageBuiltins[EShLangFragment].append(postfixes[dimMap[sampler.dim]]);
-            }
-            stageBuiltins[EShLangFragment].append(");\n");
-        }
 
-        stageBuiltins[EShLangCompute].append("vec2 textureQueryLod(");
-        stageBuiltins[EShLangCompute].append(typeName);
-        if (dimMap[sampler.dim] == 1)
-            stageBuiltins[EShLangCompute].append(", float");
-        else {
-            stageBuiltins[EShLangCompute].append(", vec");
-            stageBuiltins[EShLangCompute].append(postfixes[dimMap[sampler.dim]]);
+        const TString funcName[2] = {"vec2 textureQueryLod(", "vec2 textureQueryLOD("};
+
+        for (int i = 0; i < 2; ++i){
+            for (int f16TexAddr = 0; f16TexAddr < 2; ++f16TexAddr) {
+                if (f16TexAddr && sampler.type != EbtFloat16)
+                    continue;
+                stageBuiltins[EShLangFragment].append(funcName[i]);
+                stageBuiltins[EShLangFragment].append(typeName);
+                if (dimMap[sampler.dim] == 1)
+                    if (f16TexAddr)
+                        stageBuiltins[EShLangFragment].append(", float16_t");
+                    else
+                        stageBuiltins[EShLangFragment].append(", float");
+                else {
+                    if (f16TexAddr)
+                        stageBuiltins[EShLangFragment].append(", f16vec");
+                    else
+                        stageBuiltins[EShLangFragment].append(", vec");
+                    stageBuiltins[EShLangFragment].append(postfixes[dimMap[sampler.dim]]);
+                }
+                stageBuiltins[EShLangFragment].append(");\n");
+            }
+
+            stageBuiltins[EShLangCompute].append(funcName[i]);
+            stageBuiltins[EShLangCompute].append(typeName);
+            if (dimMap[sampler.dim] == 1)
+                stageBuiltins[EShLangCompute].append(", float");
+            else {
+                stageBuiltins[EShLangCompute].append(", vec");
+                stageBuiltins[EShLangCompute].append(postfixes[dimMap[sampler.dim]]);
+            }
+            stageBuiltins[EShLangCompute].append(");\n");
         }
-        stageBuiltins[EShLangCompute].append(");\n");
     }
 
     //
@@ -8061,7 +8073,7 @@ void TBuiltIns::identifyBuiltIns(int version, EProfile profile, const SpvVersion
         }
 
         if (profile != EEsProfile && version < 400) {
-            symbolTable.setFunctionExtensions("textureQueryLod", 1, &E_GL_ARB_texture_query_lod);
+            symbolTable.setFunctionExtensions("textureQueryLOD", 1, &E_GL_ARB_texture_query_lod);
         }
 
         if (profile != EEsProfile && version >= 460) {
@@ -8324,6 +8336,9 @@ void TBuiltIns::identifyBuiltIns(int version, EProfile profile, const SpvVersion
         symbolTable.setFunctionExtensions("clockARB",     1, &E_GL_ARB_shader_clock);
         symbolTable.setFunctionExtensions("clock2x32ARB", 1, &E_GL_ARB_shader_clock);
 
+        symbolTable.setFunctionExtensions("clockRealtimeEXT", 1, &E_GL_EXT_shader_realtime_clock);
+        symbolTable.setFunctionExtensions("clockRealtime2x32EXT", 1, &E_GL_EXT_shader_realtime_clock);
+
         if (profile == EEsProfile && version < 320) {
             symbolTable.setVariableExtensions("gl_PrimitiveID",  Num_AEP_geometry_shader, AEP_geometry_shader);
             symbolTable.setVariableExtensions("gl_Layer",        Num_AEP_geometry_shader, AEP_geometry_shader);
@@ -8341,10 +8356,11 @@ void TBuiltIns::identifyBuiltIns(int version, EProfile profile, const SpvVersion
         }
 
         if (profile != EEsProfile && version < 330 ) {
-            symbolTable.setFunctionExtensions("floatBitsToInt", 1, &E_GL_ARB_shader_bit_encoding);
-            symbolTable.setFunctionExtensions("floatBitsToUint", 1, &E_GL_ARB_shader_bit_encoding);
-            symbolTable.setFunctionExtensions("intBitsToFloat", 1, &E_GL_ARB_shader_bit_encoding);
-            symbolTable.setFunctionExtensions("uintBitsToFloat", 1, &E_GL_ARB_shader_bit_encoding);
+            const char* bitsConvertExt[2] = {E_GL_ARB_shader_bit_encoding, E_GL_ARB_gpu_shader5};
+            symbolTable.setFunctionExtensions("floatBitsToInt", 2, bitsConvertExt);
+            symbolTable.setFunctionExtensions("floatBitsToUint", 2, bitsConvertExt);
+            symbolTable.setFunctionExtensions("intBitsToFloat", 2, bitsConvertExt);
+            symbolTable.setFunctionExtensions("uintBitsToFloat", 2, bitsConvertExt);
         }
 
         if (profile != EEsProfile && version < 430 ) {
@@ -8730,6 +8746,7 @@ void TBuiltIns::identifyBuiltIns(int version, EProfile profile, const SpvVersion
             symbolTable.setVariableExtensions("gl_RayTminEXT", 1, &E_GL_EXT_ray_tracing);
             symbolTable.setVariableExtensions("gl_RayTmaxNV", 1, &E_GL_NV_ray_tracing);
             symbolTable.setVariableExtensions("gl_RayTmaxEXT", 1, &E_GL_EXT_ray_tracing);
+            symbolTable.setVariableExtensions("gl_CullMaskEXT", 1, &E_GL_EXT_ray_cull_mask);
             symbolTable.setVariableExtensions("gl_HitTNV", 1, &E_GL_NV_ray_tracing);
             symbolTable.setVariableExtensions("gl_HitTEXT", 1, &E_GL_EXT_ray_tracing);
             symbolTable.setVariableExtensions("gl_HitKindNV", 1, &E_GL_NV_ray_tracing);
@@ -8779,6 +8796,7 @@ void TBuiltIns::identifyBuiltIns(int version, EProfile profile, const SpvVersion
             BuiltInVariable("gl_RayTminEXT",             EbvRayTmin,            symbolTable);
             BuiltInVariable("gl_RayTmaxNV",              EbvRayTmax,            symbolTable);
             BuiltInVariable("gl_RayTmaxEXT",             EbvRayTmax,            symbolTable);
+            BuiltInVariable("gl_CullMaskEXT",            EbvCullMask,           symbolTable);
             BuiltInVariable("gl_HitTNV",                 EbvHitT,               symbolTable);
             BuiltInVariable("gl_HitTEXT",                EbvHitT,               symbolTable);
             BuiltInVariable("gl_HitKindNV",              EbvHitKind,            symbolTable);
