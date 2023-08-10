@@ -271,6 +271,9 @@ void TIntermediate::mergeModes(TInfoSink& infoSink, TIntermediate& unit)
 
     MERGE_TRUE(earlyFragmentTests);
     MERGE_TRUE(postDepthCoverage);
+    MERGE_TRUE(nonCoherentColorAttachmentReadEXT);
+    MERGE_TRUE(nonCoherentDepthAttachmentReadEXT);
+    MERGE_TRUE(nonCoherentStencilAttachmentReadEXT);
 
     if (depthLayout == EldNone)
         depthLayout = unit.depthLayout;
@@ -1617,7 +1620,7 @@ bool TIntermediate::userOutputUsed() const
     return found;
 }
 
-// Accumulate locations used for inputs, outputs, and uniforms, payload and callable data
+// Accumulate locations used for inputs, outputs, and uniforms, payload, callable data, and tileImageEXT
 // and check for collisions as the accumulation is done.
 //
 // Returns < 0 if no collision, >= 0 if collision and the value returned is a colliding value.
@@ -1630,7 +1633,6 @@ int TIntermediate::addUsedLocation(const TQualifier& qualifier, const TType& typ
     typeCollision = false;
 
     int set;
-    int setRT;
     if (qualifier.isPipeInput())
         set = 0;
     else if (qualifier.isPipeOutput())
@@ -1639,12 +1641,14 @@ int TIntermediate::addUsedLocation(const TQualifier& qualifier, const TType& typ
         set = 2;
     else if (qualifier.storage == EvqBuffer)
         set = 3;
+    else if (qualifier.storage == EvqTileImageEXT)
+        set = 4;
     else if (qualifier.isAnyPayload())
-        setRT = 0;
+        set = 0;
     else if (qualifier.isAnyCallable())
-        setRT = 1;
+        set = 1;
     else if (qualifier.isHitObjectAttrNV())
-        setRT = 2;
+        set = 2;
     else
         return -1;
 
@@ -1686,10 +1690,12 @@ int TIntermediate::addUsedLocation(const TQualifier& qualifier, const TType& typ
 #ifndef GLSLANG_WEB
     if (qualifier.isAnyPayload() || qualifier.isAnyCallable() || qualifier.isHitObjectAttrNV()) {
         TRange range(qualifier.layoutLocation, qualifier.layoutLocation);
-        collision = checkLocationRT(setRT, qualifier.layoutLocation);
+        collision = checkLocationRT(set, qualifier.layoutLocation);
         if (collision < 0)
-            usedIoRT[setRT].push_back(range);
-    } else if (size == 2 && type.getBasicType() == EbtDouble && type.getVectorSize() == 3 &&
+            usedIoRT[set].push_back(range);
+        return collision;
+    }
+    if (size == 2 && type.getBasicType() == EbtDouble && type.getVectorSize() == 3 &&
         (qualifier.isPipeInput() || qualifier.isPipeOutput())) {
         // Dealing with dvec3 in/out split across two locations.
         // Need two io-ranges.
@@ -1715,31 +1721,33 @@ int TIntermediate::addUsedLocation(const TQualifier& qualifier, const TType& typ
             if (collision < 0)
                 usedIo[set].push_back(range2);
         }
-    } else
-#endif
-    {
-        // Not a dvec3 in/out split across two locations, generic path.
-        // Need a single IO-range block.
-
-        TRange locationRange(qualifier.layoutLocation, qualifier.layoutLocation + size - 1);
-        TRange componentRange(0, 3);
-        if (qualifier.hasComponent() || type.getVectorSize() > 0) {
-            int consumedComponents = type.getVectorSize() * (type.getBasicType() == EbtDouble ? 2 : 1);
-            if (qualifier.hasComponent())
-                componentRange.start = qualifier.layoutComponent;
-            componentRange.last  = componentRange.start + consumedComponents - 1;
-        }
-
-        // combine location and component ranges
-        TIoRange range(locationRange, componentRange, type.getBasicType(), qualifier.hasIndex() ? qualifier.getIndex() : 0);
-
-        // check for collisions, except for vertex inputs on desktop targeting OpenGL
-        if (! (!isEsProfile() && language == EShLangVertex && qualifier.isPipeInput()) || spvVersion.vulkan > 0)
-            collision = checkLocationRange(set, range, type, typeCollision);
-
-        if (collision < 0)
-            usedIo[set].push_back(range);
+        return collision;
     }
+#endif
+    // Not a dvec3 in/out split across two locations, generic path.
+    // Need a single IO-range block.
+
+    TRange locationRange(qualifier.layoutLocation, qualifier.layoutLocation + size - 1);
+    TRange componentRange(0, 3);
+    if (qualifier.hasComponent() || type.getVectorSize() > 0) {
+        int consumedComponents = type.getVectorSize() * (type.getBasicType() == EbtDouble ? 2 : 1);
+        if (qualifier.hasComponent())
+            componentRange.start = qualifier.layoutComponent;
+        componentRange.last  = componentRange.start + consumedComponents - 1;
+    }
+
+    // combine location and component ranges
+    TBasicType basicTy = type.getBasicType();
+    if (basicTy == EbtSampler && type.getSampler().isAttachmentEXT())
+        basicTy = type.getSampler().type;
+    TIoRange range(locationRange, componentRange, basicTy, qualifier.hasIndex() ? qualifier.getIndex() : 0);
+
+    // check for collisions, except for vertex inputs on desktop targeting OpenGL
+    if (! (!isEsProfile() && language == EShLangVertex && qualifier.isPipeInput()) || spvVersion.vulkan > 0)
+        collision = checkLocationRange(set, range, type, typeCollision);
+
+    if (collision < 0)
+        usedIo[set].push_back(range);
 
     return collision;
 }
@@ -1760,6 +1768,19 @@ int TIntermediate::checkLocationRange(int set, const TIoRange& range, const TTyp
             typeCollision = true;
             return std::max(range.location.start, usedIo[set][r].location.start);
         }
+    }
+
+    // check typeCollision between tileImageEXT and out
+    if (set == 4 || set == 1) {
+      // if the set is "tileImageEXT", check against "out" and vice versa
+      int againstSet = (set == 4) ? 1 : 4;
+      for (size_t r = 0; r < usedIo[againstSet].size(); ++r) {
+        if (range.location.overlap(usedIo[againstSet][r].location) && type.getBasicType() != usedIo[againstSet][r].basicType) {
+            // aliased-type mismatch
+            typeCollision = true;
+            return std::max(range.location.start, usedIo[againstSet][r].location.start);
+        }
+      }
     }
 
     return -1; // no collision

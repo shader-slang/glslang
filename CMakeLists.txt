@@ -30,23 +30,10 @@
 # LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
-
-# increase to 3.1 once all major distributions
-# include a version of CMake >= 3.1
 cmake_minimum_required(VERSION 3.14.0)
-if (POLICY CMP0048)
-  cmake_policy(SET CMP0048 NEW)
-endif()
-if(POLICY CMP0054)
-  cmake_policy(SET CMP0054 NEW)
-endif()
-
 project(glslang)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
-
-# Enable compile commands database
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Adhere to GNU filesystem layout conventions
 include(GNUInstallDirs)
@@ -78,7 +65,7 @@ if(NOT ${SKIP_GLSLANG_INSTALL})
 endif()
 option(ENABLE_SPVREMAPPER "Enables building of SPVRemapper" ON)
 
-option(ENABLE_GLSLANG_BINARIES "Builds glslangValidator and spirv-remap" ON)
+option(ENABLE_GLSLANG_BINARIES "Builds glslang and spirv-remap" ON)
 
 option(ENABLE_GLSLANG_JS
     "If using Emscripten, build glslang.js. Otherwise, builds a sample executable for binary-size testing." OFF)
@@ -117,18 +104,6 @@ else()
 endif()
 option(ENABLE_CTEST "Enables testing" ON)
 
-if(ENABLE_GLSLANG_INSTALL AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT AND WIN32)
-    set(CMAKE_INSTALL_PREFIX "install" CACHE STRING "..." FORCE)
-endif()
-
-option(USE_CCACHE "Use ccache" OFF)
-if(USE_CCACHE)
-    find_program(CCACHE_FOUND ccache)
-    if(CCACHE_FOUND)
-        set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
-    endif()
-endif()
-
 if(ENABLE_CTEST)
     include(CTest)
 endif()
@@ -151,7 +126,7 @@ if(WIN32)
         include(ChooseMSVCCRT.cmake)
     endif()
     add_definitions(-DGLSLANG_OSINCLUDE_WIN32)
-elseif(UNIX)
+elseif(UNIX OR ANDROID)
     add_definitions(-DGLSLANG_OSINCLUDE_UNIX)
 else()
     message("unknown platform")
@@ -160,7 +135,6 @@ endif()
 if(${CMAKE_CXX_COMPILER_ID} MATCHES "GNU")
     add_compile_options(-Wall -Wmaybe-uninitialized -Wuninitialized -Wunused -Wunused-local-typedefs
                         -Wunused-parameter -Wunused-value  -Wunused-variable -Wunused-but-set-parameter -Wunused-but-set-variable -fno-exceptions)
-    add_compile_options(-Wno-reorder)  # disable this from -Wall, since it happens all over.
     if(NOT ENABLE_RTTI)
         add_compile_options(-fno-rtti)
     endif()
@@ -171,16 +145,13 @@ if(${CMAKE_CXX_COMPILER_ID} MATCHES "GNU")
         add_compile_options(-Werror=deprecated-copy)
     endif()
 
-    if(NOT CMAKE_VERSION VERSION_LESS "3.13" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "OpenBSD" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         # Error if there's symbols that are not found at link time.
-        # add_link_options() was added in CMake 3.13 - if using an earlier
-        # version don't set this - it should be caught by presubmits anyway.
         add_link_options("-Wl,--no-undefined")
     endif()
 elseif(${CMAKE_CXX_COMPILER_ID} MATCHES "Clang" AND NOT MSVC)
     add_compile_options(-Wall -Wuninitialized -Wunused -Wunused-local-typedefs
                         -Wunused-parameter -Wunused-value  -Wunused-variable)
-    add_compile_options(-Wno-reorder)  # disable this from -Wall, since it happens all over.
     if(NOT ENABLE_RTTI)
         add_compile_options(-fno-rtti)
     endif()
@@ -188,13 +159,11 @@ elseif(${CMAKE_CXX_COMPILER_ID} MATCHES "Clang" AND NOT MSVC)
         add_compile_options(-fno-exceptions)
     endif()
 
-    if(NOT CMAKE_VERSION VERSION_LESS "3.13")
-        # Error if there's symbols that are not found at link time.
-        # add_link_options() was added in CMake 3.13 - if using an earlier
-        # version don't set this - it should be caught by presubmits anyway.
+    if(NOT (CMAKE_SYSTEM_NAME STREQUAL "OpenBSD" OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten"))
+        # Error if there's symbols that are not found at link time. Some linkers do not support this flag.
         if (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
             add_link_options("-Wl,-undefined,error")
-        else()
+        elseif(NOT APPLE)
             add_link_options("-Wl,--no-undefined")
         endif()
     endif()
@@ -227,21 +196,16 @@ if(ENABLE_GLSLANG_JS)
     endif()
 endif()
 
-# Request C++11
-if(${CMAKE_VERSION} VERSION_LESS 3.1)
-    # CMake versions before 3.1 do not understand CMAKE_CXX_STANDARD
-    # remove this block once CMake >=3.1 has fixated in the ecosystem
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-else()
-    set(CMAKE_CXX_STANDARD 11)
-    set(CMAKE_CXX_STANDARD_REQUIRED ON)
-    set(CMAKE_CXX_EXTENSIONS OFF)
-endif()
+# Request C++17
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 function(glslang_set_link_args TARGET)
     # For MinGW compiles, statically link against the GCC and C++ runtimes.
     # This avoids the need to ship those runtimes as DLLs.
-    if(WIN32 AND ${CMAKE_CXX_COMPILER_ID} MATCHES "GNU")
+    # This is supported by GCC and Clang.
+    if(WIN32 AND NOT MSVC)
         set_target_properties(${TARGET} PROPERTIES
                               LINK_FLAGS "-static -static-libgcc -static-libstdc++")
     endif()
@@ -313,7 +277,7 @@ else()
 endif()
 
 if(BUILD_EXTERNAL AND IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/External)
-    find_host_package(PythonInterp 3 REQUIRED)
+    find_host_package(Python3 REQUIRED)
 
     # We depend on these for later projects, so they should come first.
     add_subdirectory(External)
@@ -355,12 +319,12 @@ if(ENABLE_CTEST AND BUILD_TESTING)
     endif()
 
     if (CMAKE_CONFIGURATION_TYPES)
-        set(RESULTS_PATH ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIGURATION>/localResults)
-        set(VALIDATOR_PATH ${CMAKE_CURRENT_BINARY_DIR}/StandAlone/$<CONFIGURATION>/glslangValidator)
-        set(REMAP_PATH ${CMAKE_CURRENT_BINARY_DIR}/StandAlone/$<CONFIGURATION>/spirv-remap)
+        set(RESULTS_PATH ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/localResults)
+        set(VALIDATOR_PATH ${CMAKE_CURRENT_BINARY_DIR}/StandAlone/$<CONFIG>/glslang)
+        set(REMAP_PATH ${CMAKE_CURRENT_BINARY_DIR}/StandAlone/$<CONFIG>/spirv-remap)
     else()
         set(RESULTS_PATH ${CMAKE_CURRENT_BINARY_DIR}/localResults)
-        set(VALIDATOR_PATH ${CMAKE_CURRENT_BINARY_DIR}/StandAlone/glslangValidator)
+        set(VALIDATOR_PATH ${CMAKE_CURRENT_BINARY_DIR}/StandAlone/glslang)
         set(REMAP_PATH ${CMAKE_CURRENT_BINARY_DIR}/StandAlone/spirv-remap)
     endif()
 
@@ -372,10 +336,18 @@ endif()
 if(ENABLE_GLSLANG_INSTALL)
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/glslang-config.cmake.in" [=[
         @PACKAGE_INIT@
+        @INSTALL_CONFIG_UNIX@
         include("@PACKAGE_PATH_EXPORT_TARGETS@")
     ]=])
-    
+
     set(PATH_EXPORT_TARGETS "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}/glslang-targets.cmake")
+    if(UNIX OR "${CMAKE_SYSTEM_NAME}" STREQUAL "Fuchsia")
+        set(INSTALL_CONFIG_UNIX [=[
+            include(CMakeFindDependencyMacro)
+            set(THREADS_PREFER_PTHREAD_FLAG ON)
+            find_dependency(Threads REQUIRED)
+        ]=])
+    endif()
     configure_package_config_file(
         "${CMAKE_CURRENT_BINARY_DIR}/glslang-config.cmake.in"
         "${CMAKE_CURRENT_BINARY_DIR}/glslang-config.cmake"
