@@ -4966,6 +4966,7 @@ YYSTYPE yylval YY_INITIAL_VALUE (= yyval_default);
 
     /* Number of syntax errors so far.  */
     int yynerrs = 0;
+    (void)yynerrs; // avoid warning
 
     yy_state_fast_t yystate = 0;
     /* Number of tokens to shift before error messages enabled.  */
